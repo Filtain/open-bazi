@@ -1,0 +1,8 @@
+services:
+  open-bazi:
+    build: .
+    ports:
+      - "127.0.0.1:8765:8765"
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
