@@ -114,6 +114,28 @@ def test_reject_bad_endpoint_without_echoing_key(client):
     assert "do-not-echo" not in r.text
 
 
+def test_disconnect_invalidates_inflight_connection(monkeypatch):
+    import asyncio
+    main.active_config = None
+    config = main.Connection(provider="custom", base_url="https://example.com/v1", model="test", api_key="fake")
+    async def scenario():
+        started, finish = asyncio.Event(), asyncio.Event()
+        async def delayed(*args, **kwargs):
+            started.set()
+            await finish.wait()
+            return "OK", {}
+        monkeypatch.setattr(main, "completion", delayed)
+        task = asyncio.create_task(main.connect(config))
+        await started.wait()
+        main.disconnect()
+        finish.set()
+        with pytest.raises(main.HTTPException) as exc:
+            await task
+        assert exc.value.status_code == 409
+        assert main.active_config is None
+    asyncio.run(scenario())
+
+
 def test_report_requires_connection(client):
     assert client.post("/api/report", json=BASE).status_code == 409
 

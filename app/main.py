@@ -35,6 +35,7 @@ RULES = [
 ]
 app = FastAPI(title="Open Bazi", docs_url=None, redoc_url=None, openapi_url=None)
 active_config = None
+configuration_epoch = 0
 generation_lock = asyncio.Lock()
 
 
@@ -149,15 +150,20 @@ def chart(birth: BirthInput):
 
 @app.post("/api/connect")
 async def connect(config: Connection):
-    global active_config
+    global active_config, configuration_epoch
+    configuration_epoch += 1
+    epoch = configuration_epoch
     _, usage = await completion(config, [{"role": "user", "content": "Reply only OK."}], 32)
+    if epoch != configuration_epoch:
+        raise HTTPException(409, "连接设置已更改，本次测试结果未保存。")
     active_config = config
     return {"connected": True, "model": config.model, "usage": usage}
 
 
 @app.post("/api/disconnect")
 def disconnect():
-    global active_config
+    global active_config, configuration_epoch
+    configuration_epoch += 1
     active_config = None
     return {"connected": False}
 
