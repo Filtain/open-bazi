@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic_core import PydanticCustomError
 from starlette.concurrency import run_in_threadpool
 from zoneinfo import reset_tzpath
 
@@ -37,6 +38,12 @@ app = FastAPI(title="Open Bazi", docs_url=None, redoc_url=None, openapi_url=None
 active_config = None
 configuration_epoch = 0
 generation_lock = asyncio.Lock()
+KEY_ERRORS = {
+    "key_missing": "请粘贴供应商平台创建时提供的完整 API Key。",
+    "key_masked": "密钥含星号或省略号，可能是打码后的显示内容。请复制完整密钥，或新建一枚后立即复制。",
+    "key_format": "密钥包含空白、不可见字符或非英文字符，请重新复制完整 API Key；不要粘贴登录密码或接口网址。",
+    "key_url": "这里需要填写 API Key，不是接口网址。请从供应商的 API keys 页面复制密钥。",
+}
 
 
 class Connection(BaseModel):
@@ -47,6 +54,23 @@ class Connection(BaseModel):
 
     @model_validator(mode="after")
     def valid_endpoint(self):
+        key = self.api_key.get_secret_value()
+        # Normalize only obvious copy wrappers; never remove characters inside a key.
+        for _ in range(2):
+            key = key.strip(" \t\r\n\u200b\ufeff")
+            if len(key) >= 2 and (key[0], key[-1]) in (("'", "'"), ('"', '"')):
+                key = key[1:-1].strip()
+            if key.lower().startswith(("bearer ", "bearer\t")):
+                key = key[6:].strip()
+        if not key and self.provider != "custom":
+            raise PydanticCustomError("key_missing", KEY_ERRORS["key_missing"])
+        if self.provider != "custom" and any(mark in key for mark in ("*", "…", "...")):
+            raise PydanticCustomError("key_masked", KEY_ERRORS["key_masked"])
+        if key.startswith(("http://", "https://")):
+            raise PydanticCustomError("key_url", KEY_ERRORS["key_url"])
+        if any(ord(c) < 33 or ord(c) > 126 for c in key):
+            raise PydanticCustomError("key_format", KEY_ERRORS["key_format"])
+        self.api_key = SecretStr(key)
         self.base_url = self.base_url.strip().rstrip("/")
         if self.base_url.endswith("/chat/completions"):
             self.base_url = self.base_url[:-len("/chat/completions")]
@@ -57,8 +81,6 @@ class Connection(BaseModel):
             raise ValueError("远程 API 必须使用 HTTPS；HTTP 仅允许本机地址。")
         if self.provider != "custom" and self.base_url != PROVIDERS[self.provider]["base_url"]:
             raise ValueError("预置供应商地址不可修改，请选择自定义接口。")
-        if not self.api_key.get_secret_value().strip() and self.provider != "custom":
-            raise ValueError("请填写 API Key。")
         return self
 
 
@@ -86,7 +108,9 @@ async def local_boundary(request: Request, call_next):
 @app.exception_handler(RequestValidationError)
 async def validation_error(request, error):
     # Do not return invalid input objects, which could contain an API key.
-    return JSONResponse({"detail": "输入格式不正确，请核对日期、时间或连接设置。"}, status_code=422)
+    message = next((KEY_ERRORS[e["type"]] for e in error.errors() if e["type"] in KEY_ERRORS),
+                   "输入格式不正确，请核对日期、时间或连接设置。")
+    return JSONResponse({"detail": message}, status_code=422)
 
 
 def compute(birth):
@@ -114,7 +138,12 @@ async def completion(config, messages, limit, json_mode=False):
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10), follow_redirects=False, trust_env=False) as client:
             response = await client.post(config.base_url + "/chat/completions", headers=headers, json=payload)
         if response.status_code != 200:
-            message = {401: "密钥无效或地域不匹配。", 402: "供应商余额不足。", 403: "供应商拒绝访问，请检查账号与模型权限。", 404: "接口地址或模型名称不存在。", 429: "供应商限流或额度不足，请稍后重试。"}.get(response.status_code, "供应商请求失败，请检查配置后重试。")
+            authentication = {
+                "deepseek": "DeepSeek 接口返回认证失败（HTTP 401）。无需选择地域。请在官方 API keys 页面新建密钥并复制完整值后重试；不要使用登录密码或打码后的内容。",
+                "qwen": "通义千问接口返回认证失败（HTTP 401）。请核对完整密钥，并确认它来自北京地域；其他地域或专属地址请使用自定义接口。",
+                "custom": "自定义接口返回认证失败（HTTP 401）。请核对该接口对应的密钥与认证方式。",
+            }
+            message = {401: authentication[config.provider], 402: "供应商返回余额不足（HTTP 402），请在对应 API 平台检查余额。", 403: "供应商拒绝访问（HTTP 403），请检查账号与模型权限。", 404: "接口地址或模型名称不存在（HTTP 404）。", 429: "供应商限流或额度不足（HTTP 429），请稍后重试。"}.get(response.status_code, "供应商请求失败（HTTP " + str(response.status_code) + "），请检查配置后重试。")
             raise HTTPException(502, message)
         data = response.json()
         choice = data["choices"][0]

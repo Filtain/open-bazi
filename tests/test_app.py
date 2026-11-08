@@ -163,3 +163,40 @@ def test_provider_protocol_and_errors(monkeypatch):
     assert captured[0].headers["authorization"] == "Bearer fake"
     assert json.loads(captured[0].content)["enable_thinking"] is False
     assert content == "OK" and usage == {"total_tokens": 5}
+
+
+@pytest.mark.parametrize("key", ['  sk-demo-only  ', 'Bearer sk-demo-only', '"sk-demo-only"', "'Bearer sk-demo-only'", '\ufeffsk-demo-only\u200b'])
+def test_pasted_key_wrappers_are_removed(client, monkeypatch, key):
+    async def fake(config, *args, **kwargs):
+        assert config.api_key.get_secret_value() == "sk-demo-only"
+        return "OK", {}
+    monkeypatch.setattr(main, "completion", fake)
+    r = client.post("/api/connect", json={"provider": "deepseek", "base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key": key})
+    assert r.status_code == 200
+    assert "sk-demo-only" not in r.text
+
+
+@pytest.mark.parametrize("key,expected", [('sk-demo****', '打码'), ('sk-demo…', '打码'), ('sk-demo only', '空白'), ('sk-demo\u200bonly', '不可见'), ('https://api.deepseek.com', '网址'), ('', '完整')])
+def test_invalid_keys_rejected_before_network(client, monkeypatch, key, expected):
+    async def never(*args, **kwargs):
+        raise AssertionError("Invalid keys must not be sent to a supplier")
+    monkeypatch.setattr(main, "completion", never)
+    r = client.post("/api/connect", json={"provider": "deepseek", "base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key": key})
+    assert r.status_code == 422
+    assert expected in r.json()["detail"]
+    assert "sk-demo" not in r.text
+
+
+@pytest.mark.parametrize("provider,code,expected", [("deepseek",401,"无需选择地域"), ("qwen",401,"北京地域"), ("custom",401,"认证方式"), ("deepseek",402,"余额不足")])
+def test_authentication_errors_are_specific_and_private(client, monkeypatch, provider, code, expected):
+    real_client = main.httpx.AsyncClient
+    def handler(request):
+        assert request.headers["authorization"] == "Bearer private-test-key"
+        return main.httpx.Response(code, json={"error":{"message":"Echoed secret private-test-key", "code":"auth_error"}})
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kw: real_client(transport=main.httpx.MockTransport(handler), **kw))
+    url = main.PROVIDERS[provider]["base_url"] or "https://example.com/v1"
+    r = client.post("/api/connect", json={"provider":provider,"base_url":url,"model":"test","api_key":"private-test-key"})
+    assert r.status_code == 502
+    assert expected in r.json()["detail"]
+    assert str(code) in r.json()["detail"]
+    assert "private-test-key" not in r.text
