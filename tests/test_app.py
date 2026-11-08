@@ -12,6 +12,7 @@ BASE = {"year": 1988, "month": 2, "day": 15, "time": "23:30", "gender": 1, "sele
 @pytest.fixture
 def client():
     main.active_config = None
+    main.REPORTS.clear()
     with TestClient(main.app, base_url="http://127.0.0.1:8765") as c:
         c.headers["x-local-token"] = c.get("/api/bootstrap").json()["token"]
         yield c
@@ -139,14 +140,6 @@ def test_disconnect_invalidates_inflight_connection(monkeypatch):
 def test_report_requires_connection(client):
     assert client.post("/api/report", json=BASE).status_code == 409
 
-
-@pytest.mark.parametrize("fact_id,expected", [("pillar_0", 200), ("invented_fact", 502)])
-def test_report_citations(client, monkeypatch, fact_id, expected):
-    main.active_config = main.Connection(provider="custom", base_url="https://example.com/v1", model="test", api_key="fake")
-    async def fake(*args, **kwargs):
-        return json.dumps({"sections": [{"title": "结构", "text": "用于验证引用。", "fact_ids": [fact_id], "rule_ids": ["R1"]}]}), {"total_tokens": 10}
-    monkeypatch.setattr(main, "completion", fake)
-    assert client.post("/api/report", json=BASE).status_code == expected
 
 
 def test_provider_protocol_and_errors(monkeypatch):

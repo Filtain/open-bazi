@@ -1,7 +1,10 @@
 import asyncio
 import json
 import os
+import re
 import secrets
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -18,7 +21,9 @@ from zoneinfo import reset_tzpath
 
 # Use the installed tzdata package on every OS instead of differing system databases.
 reset_tzpath(())
-from .engine import BirthInput, calculate  # noqa: E402
+from .engine import BirthInput, STANDARD, calculate  # noqa: E402
+from .analysis import enrich, annual_evidence
+from .sop import RULES, VERSION as SOP_VERSION, NATAL, SYSTEM, outlook_spec, report_messages, validate_report, validate_reading, question_years
 
 ROOT = Path(__file__).parent
 PORT = int(os.environ.get("OPEN_BAZI_PORT", "8765"))
@@ -28,12 +33,6 @@ PROVIDERS = {
     "qwen": {"name": "通义千问 · 北京", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "docs": "https://bailian.console.aliyun.com/"},
     "custom": {"name": "自定义兼容接口", "base_url": "", "model": "", "docs": ""},
 }
-RULES = [
-    {"id": "R1", "title": "十神是相对关系", "text": "十神由其他天干与原局日主的五行生克和阴阳关系确定。日主自身标为日主。十神名称不直接等于现实职业、财富或亲属事件。", "source": "本项目算法说明：十神映射表"},
-    {"id": "R2", "title": "计数不等于旺衰", "text": "当前五行数量只计算四个天干和四个地支主气，不纳入藏干权重，不能仅凭数量判定旺衰、喜忌或补什么。", "source": "本项目算法说明：计数口径"},
-    {"id": "R3", "title": "流年的时间边界", "text": "流年以立春时刻换年，与公历元旦、春节不同。十神始终相对出生盘日主计算。", "source": "本项目算法说明：立春换年"},
-    {"id": "R4", "title": "大运是传统时间分段", "text": "按选定传统参数决定顺逆；三日折一年，间隔按分钟分解，首运开始后每十个公历年为一段。此分段本身不能证实事件预测。", "source": "本项目算法说明：起运与大运"},
-]
 app = FastAPI(title="Open Bazi", docs_url=None, redoc_url=None, openapi_url=None)
 active_config = None
 configuration_epoch = 0
@@ -115,7 +114,7 @@ async def validation_error(request, error):
 
 def compute(birth):
     try:
-        return calculate(birth)
+        return enrich(calculate(birth))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     except Exception:
@@ -197,35 +196,156 @@ def disconnect():
     return {"connected": False}
 
 
-@app.post("/api/report")
-async def report(birth: BirthInput):
-    config = active_config
-    if config is None:
+# Local memory only: bounded capacity and six-hour idle expiry. No API keys in records.
+REPORTS = {}
+REPORT_TTL = 6 * 3600
+REPORT_LIMIT = 8
+
+
+def prune_reports():
+    now = time.monotonic()
+    for key in list(REPORTS):
+        if now - REPORTS[key]["touched"] > REPORT_TTL:
+            del REPORTS[key]
+
+
+def get_record(report_id):
+    prune_reports()
+    record = REPORTS.get(report_id)
+    if record is None:
+        raise HTTPException(404, "这份报告已过期或本地服务已重启，请重新生成报告。")
+    record["touched"] = time.monotonic()
+    return record
+
+
+def view_record(record):
+    return {"id": record["id"], "status": record["status"], "sop_version": SOP_VERSION,
+            "sections": record["natal"] + record["outlook"], "model": record["model"],
+            "usage": record["usage"], "models": record["models"], "facts": record["chart"]["facts"], "rules": RULES,
+            "notice": "传统八字推演 · AI生成。已检查流程完整性和引用编号，文字判断仍需结合依据审阅，未来趋势不代表必然事件。"}
+
+
+def require_connection():
+    if active_config is None:
         raise HTTPException(409, "请先连接自己的模型 API。离线排盘无需连接。")
     if generation_lock.locked():
-        raise HTTPException(429, "已有解读正在生成，请稍后再试。")
+        raise HTTPException(429, "已有分析或回答正在生成，请完成后再试。")
+    return active_config, configuration_epoch
+
+
+def check_epoch(epoch):
+    if epoch != configuration_epoch:
+        raise HTTPException(409, "模型连接已改变，本次生成结果未保存。请使用当前连接重新生成。")
+
+
+def parse_sections(content, result, spec):
+    try:
+        return validate_report(content, result, spec)
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(502, "模型输出未通过完整流程或引用检查，已保留现有结果。可手动重试，重试会调用供应商。") from None
+
+
+def add_usage(a, b):
+    return {key: a.get(key, 0) + b.get(key, 0) for key in set(a) | set(b)}
+
+
+@app.post("/api/report")
+async def report(birth: BirthInput):
+    config, epoch = require_connection()
     async with generation_lock:
         result = await run_in_threadpool(compute, birth)
-        system = "你是八字文化学习助手。只解释给定facts和rules，不作事件、健康、财富或婚姻预测，不推断强弱喜忌，不编造古籍原文。输出中文JSON，结构为{\"sections\":[{\"title\":\"标题\",\"text\":\"简明解释\",\"fact_ids\":[\"事实ID\"],\"rule_ids\":[\"规则ID\"]}]}。写3至5节，每节最多300字，每节必须引用实际存在且相关的事实和规则。不要输出Markdown或HTML。缺失信息请明确说明。"
-        content, usage = await completion(config, [{"role": "system", "content": system}, {"role": "user", "content": json.dumps({"facts": result["facts"], "rules": RULES}, ensure_ascii=False)}], 2400, True)
+        content, usage = await completion(config, report_messages(result, NATAL), 6500, True)
+        sections = parse_sections(content, result, NATAL)
+        check_epoch(epoch)
+        prune_reports()
+        if len(REPORTS) >= REPORT_LIMIT:
+            oldest = min(REPORTS, key=lambda key: REPORTS[key]["touched"])
+            del REPORTS[oldest]
+        identifier = secrets.token_urlsafe(24)
+        record = {"id": identifier, "chart": result, "natal": sections, "outlook": [],
+                  "status": "natal_ready", "model": config.model, "models": {"natal": config.model}, "usage": usage,
+                  "history": [], "touched": time.monotonic()}
+        REPORTS[identifier] = record
+        return view_record(record)
+
+
+@app.post("/api/report/{report_id}/outlook")
+async def outlook(report_id: str):
+    record = get_record(report_id)
+    if record["status"] == "complete":
+        return view_record(record)  # Safe retry without another paid call.
+    config, epoch = require_connection()
+    async with generation_lock:
+        spec = outlook_spec(record["chart"])
+        content, usage = await completion(config, report_messages(record["chart"], spec, record["natal"]), 10000, True)
+        sections = parse_sections(content, record["chart"], spec)
+        check_epoch(epoch)
+        record.update(outlook=sections, status="complete", model=config.model,
+                      usage=add_usage(record["usage"], usage), touched=time.monotonic())
+        record["models"]["outlook"] = config.model
+        return view_record(record)
+
+
+class Question(BaseModel):
+    # Never accept client-provided charts, histories, system prompts or report text.
+    model_config = {"extra": "forbid"}
+    question: str = Field(min_length=1, max_length=1500)
+
+
+@app.post("/api/report/{report_id}/chat")
+async def chat(report_id: str, request: Question):
+    record = get_record(report_id)
+    if record["status"] != "complete":
+        raise HTTPException(409, "请先完成大运流年报告，再围绕完整分析追问。")
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(422, "请先输入想了解的问题。")
+    if len(record["history"]) >= 20:
+        raise HTTPException(409, "本次对话已达20轮，请导出后清空对话再继续。命盘与报告会保留。")
+    try:
+        previous_scope = record["history"][-1]["scope_years"] if record["history"] else record["chart"]["analysis"]["year_range"]
+        years = question_years(question, previous_scope)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    config, epoch = require_connection()
+    async with generation_lock:
+        # Recompute requested years server-side, including years beyond the report window.
+        year_facts = await run_in_threadpool(lambda: [annual_evidence(record["chart"], y) for y in years])
+        facts = [f for f in record["chart"]["facts"] if not f["id"].startswith("year_")] + year_facts
+        context = {"sop_version": SOP_VERSION, "today": datetime.now(STANDARD).date().isoformat(),
+                   "scope_years": years, "scope_note": "明确年份已由程序提取。无明确年份时沿用上一轮范围，首次提问用报告窗口。若仍有歧义，先澄清，不强行对应。",
+                   "rules": RULES, "facts": facts, "natal_report": record["natal"],
+                   "outlook_report": record["outlook"],
+                   "conversation": record["history"][-8:], "question": question,
+                   "workflow": ["确认问题主题与时间", "复核原局与既有条件判断", "合参相应大运流年", "解释依据与反证", "回答并给行动建议"],
+                   "output_schema": {"answer": "直接回答，涉及未来给出条件趋势", "basis": "相关原局及运年依据", "conditions": "限制、反证或澄清问题", "advice": "可执行建议", "fact_ids": ["至少一个相关事实ID；讨论某流年必须引用对应year_ID"], "rule_ids": ["必须包含R10和相关规则"]}}
+        content, usage = await completion(config, [{"role": "system", "content": SYSTEM},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)}], 3600, True)
         try:
             data = json.loads(content)
-            sections = data["sections"]
-            assert isinstance(sections, list) and 1 <= len(sections) <= 5
-            fact_ids = {f["id"] for f in result["facts"]}
-            rule_ids = {r["id"] for r in RULES}
-            cleaned = []
-            for section in sections:
-                assert isinstance(section["title"], str) and 0 < len(section["title"]) <= 60
-                assert isinstance(section["text"], str) and 0 < len(section["text"]) <= 1200
-                for key, allowed in (("fact_ids", fact_ids), ("rule_ids", rule_ids)):
-                    assert isinstance(section[key], list) and 1 <= len(section[key]) <= 10
-                    assert all(isinstance(v, str) and v in allowed for v in section[key])
-                cleaned.append({k: section[k] for k in ("title", "text", "fact_ids", "rule_ids")})
-        except (ValueError, KeyError, AssertionError, TypeError):
-            raise HTTPException(502, "解读未通过格式或引用检查，已保留排盘。可手动重试，重试会再次调用供应商。") from None
-        return {"sections": cleaned, "model": config.model, "usage": usage, "facts": result["facts"], "rules": RULES,
-                "notice": "AI生成，仅核验输出结构和引用ID；尚未自动证明文字与依据一致。请结合依据阅读。"}
+            answer = validate_reading(data, facts, required_rules=["R10"], chat=True)
+            mentioned = {int(y) for y in re.findall(r"(?<!\d)(\d{4})年", " ".join(answer[k] for k in ("answer", "basis", "conditions", "advice")))}
+            # Only computed annual scopes can be claimed as an annual analysis.
+            for y in mentioned & set(years):
+                if f"year_{y}" not in answer["fact_ids"]:
+                    raise ValueError("missing annual reference")
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(502, "回答未通过格式或引用检查，未写入对话。可手动重试。") from None
+        check_epoch(epoch)
+        entry = {"question": question, "answer": answer, "scope_years": years,
+                 "facts": [f for f in facts if f["id"] in answer["fact_ids"]], "model": config.model, "usage": usage}
+        record["history"].append(entry)
+        record["touched"] = time.monotonic()
+        return entry
+
+
+@app.post("/api/report/{report_id}/clear-chat")
+async def clear_chat(report_id: str):
+    record = get_record(report_id)
+    if generation_lock.locked():
+        raise HTTPException(409, "请等待正在生成的回答完成后再清空。")
+    record["history"].clear()
+    return {"cleared": True}
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")

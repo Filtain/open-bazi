@@ -1,5 +1,6 @@
 """Deterministic calculation. All astronomical comparisons use UTC+08 clocks."""
 import calendar
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 from typing import Literal, Optional
@@ -87,6 +88,7 @@ def solar_of(dt):
     return Solar.fromYmdHms(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
 
 
+@lru_cache(maxsize=256)
 def lichun(year):
     term = Solar.fromYmdHms(year, 6, 1, 12, 0, 0).getLunar().getJieQiTable()["立春"]
     return term.toYmdHms() + "+08:00"
@@ -131,4 +133,4 @@ def calculate(birth: BirthInput):
             "lunar_date": lunar.toString(), "profile": PROFILE, "engine": "lunar-python " + version("lunar-python"),
             "tzdata": version("tzdata"), "pillars": pillars, "elements": counts, "luck": luck, "annual": annual,
             "facts": facts, "warnings": warnings,
-            "limitations": ["v0.1仅支持准确到分钟的出生时间；未知时刻、太阳时与多流派对照尚未实现。", "历史钟表时间采用Asia/Shanghai规则，不适用于新疆地方时间等其他钟表口径。", "计算一致性不等于命理预测有效性。"]}
+            "limitations": ["当前仅支持准确到分钟的出生时间；未知时刻、太阳时与多流派对照尚未实现。", "历史钟表时间采用Asia/Shanghai规则，不适用于新疆地方时间等其他钟表口径。", "计算一致性不等于命理预测有效性。"]}

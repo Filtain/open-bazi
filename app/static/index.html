@@ -5,25 +5,42 @@
 <header class="topbar"><a class="wordmark" href="/">Open Bazi <span>开源本地版</span></a><nav aria-label="主导航"><button id="nav-chart" class="nav active" aria-pressed="true">排盘工作台</button><button id="nav-connect" class="nav" aria-pressed="false">模型连接 <span id="connection-dot">未连接</span></button></nav></header>
 <main>
 <section id="workspace">
-<div class="page-heading"><p class="eyebrow">LOCAL WORKSPACE · v0.1</p><h1>从一份清楚的命盘开始。</h1><p>在自己的电脑排盘，按需连接自己的 AI。出生资料不会上传到我们的服务器。</p></div>
+<div class="page-heading"><p class="eyebrow">LOCAL WORKSPACE · v0.2</p><h1>看懂命盘，也看清未来的时间脉络。</h1><p>本地排盘与规则初读，连接自己的模型后，获得命格、大运流年总报告，并继续追问。</p></div>
 <div class="workspace-grid">
 <section class="input-panel" aria-labelledby="birth-heading"><div class="section-heading"><h2 id="birth-heading">出生资料</h2><button id="example" class="text-button" type="button">填入测试示例</button></div>
 <form id="birth-form">
 <label>日期类型<select id="calendar"><option value="solar">公历</option><option value="lunar">农历</option></select></label>
 <div class="date-grid"><label>年<input id="year" type="number" min="1970" max="2099" placeholder="1990" required></label><label>月<input id="month" type="number" min="1" max="12" placeholder="1" required></label><label>日<input id="day" type="number" min="1" max="31" placeholder="1" required></label></div>
 <label class="check" id="leap-row" hidden><input id="leap" type="checkbox">这是农历闰月</label>
-<label>出生时刻<input id="time" type="time" required></label><p class="field-note">v0.1 需要准确到分钟的时刻。时间不详时请勿随意代填。</p>
+<label>出生时刻<input id="time" type="time" required></label><p class="field-note">需要准确到分钟的时刻。时间不详时请勿随意代填。</p>
 <label>传统排运参数<select id="gender"><option value="">暂不提供，仅排四柱</option><option value="1">男</option><option value="0">女</option></select></label>
 <p class="field-note">仅用于传统大运顺逆计算。</p>
-<details><summary>时间口径与流年</summary><label>出生记录的钟表口径<select id="clock"><option value="historical">中国钟表时间，处理历史夏令时</option><option value="standard">已换算的固定东八区标准时间</option></select></label><p class="field-note">不适用于境外时间、新疆地方时间；当前未启用真太阳时。</p><label>夏令时重复时刻<select id="fold"><option value="">自动检查</option><option value="0">第一次出现</option><option value="1">第二次出现</option></select></label><label>查看流年<input id="selected-year" type="number" min="1970" max="2099" required></label></details>
-<button id="calculate" type="submit" class="primary full">生成命盘 <span aria-hidden="true">→</span></button><p class="field-note centered">本地计算 · 无需 API · 不自动保存</p>
+<label>分析起始年<input id="selected-year" type="number" min="1970" max="2099" required></label><p class="field-note">总报告从这里开始分析最多五个流年，至2099年止。</p><details><summary>高级时间设置</summary><label>出生记录的钟表口径<select id="clock"><option value="historical">中国钟表时间，处理历史夏令时</option><option value="standard">已换算的固定东八区标准时间</option></select></label><p class="field-note">不适用于境外时间、新疆地方时间；当前未启用真太阳时。</p><label>夏令时重复时刻<select id="fold"><option value="">自动检查</option><option value="0">第一次出现</option><option value="1">第二次出现</option></select></label></details>
+<button id="calculate" type="submit" class="primary full">生成命盘 <span aria-hidden="true">→</span></button><p id="calculate-note" class="field-note centered">本地计算 · 无需 API · 不自动保存</p>
 </form><p id="form-status" role="status" class="status"></p></section>
 <section class="result-panel" aria-live="polite">
 <div id="empty-state"><span class="small-label">YOUR CHART</span><h2>四柱、十神与时间脉络</h2><p>填写出生资料后，可以核对命盘、查看大运和所选流年。想先熟悉界面，可以使用公开测试示例。</p><div class="empty-pillars" aria-hidden="true"><span>年<br>—</span><span>月<br>—</span><span>日<br>—</span><span>时<br>—</span></div><p class="field-note">默认口径：立春换年 · 十二节换月 · 23点换日</p></div>
 <div id="chart-result" hidden><div class="section-heading"><h2>命盘总览</h2><button id="export" class="secondary" type="button">导出结果</button></div><p id="input-summary" class="muted"></p><div id="warnings"></div><div id="pillars" class="pillars"></div><div class="subsection"><h3>五行分布 <span>天干与地支主气计数</span></h3><div id="elements" class="elements"></div><p class="field-note">不计藏干权重，数量不代表强弱，也不能据此确定喜忌。</p></div><div class="subsection"><h3>所选流年</h3><div id="annual"></div></div><div class="subsection"><h3>大运时间轴</h3><p id="luck-summary" class="muted"></p><div id="luck-list" class="luck-list"></div></div><details class="technical"><summary>计算口径与适用范围</summary><div id="calculation-details"></div></details></div>
 </section></div>
-<section id="ai-panel" class="ai-panel" hidden><div class="section-heading"><div><p class="eyebrow">OPTIONAL AI READING</p><h2>让术语更容易理解</h2></div><button id="generate-report" class="primary">生成 AI 解读</button></div><p class="muted">将命盘事实发送到你选择的供应商，费用由你的 API 账户承担。当前仅解释结构和术语，不提供事件预测。</p><p id="report-status" role="status" class="status"></p><div id="report-content"></div></section>
+<section id="rule-panel" class="reading-panel" hidden aria-labelledby="rule-heading">
+<div class="section-heading"><div><p class="eyebrow">01 · 本地规则解读</p><h2 id="rule-heading">这张命盘的分析起点</h2></div><span class="small-label">无需模型</span></div>
+<p class="muted">先看月令、通根、透干与组合。以下由规则计算，完整判断会在总报告中合参。</p><div id="rule-content" class="rule-reading"></div>
 </section>
-<section id="connection-page" hidden class="connection-page"><p class="eyebrow">BRING YOUR OWN KEY</p><h1>连接你自己的模型。</h1><p class="muted">选好供应商、填入密钥，点击一次完成测试与接入。离线排盘不需要这一步。</p><form id="connection-form"><label>模型供应商<select id="provider"></select></label><a id="key-link" target="_blank" rel="noopener noreferrer" class="inline-link">前往供应商获取密钥 ↗</a><label>接口地址<input id="base-url" type="url" required placeholder="https://example.com/v1"></label><label>模型名称<input id="model" required placeholder="供应商提供的模型 ID" maxlength="150"></label><label>API Key<input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴你的密钥"></label><p class="field-note">密钥仅保留在本地服务内存中，重启后需要重新填写，不写入浏览器存储或文件。自定义本机接口可留空。</p><div class="connection-actions"><button id="connect" type="submit" class="primary">测试并连接</button><button id="disconnect" type="button" class="secondary">清除连接</button></div><p class="field-note">测试会发送一句简短请求，可能产生少量 API 费用。自定义服务需支持 Chat Completions 和 JSON 输出。</p></form><p id="connection-status" role="status" class="status"></p><details><summary>隐私与连接说明</summary><p>没有平台账号，没有遥测。生成解读时仅发送计算事实与解释规则，不发送原始生日字段和密钥给其他服务。命盘事实仍可能透露个人信息，请只连接你信任的供应商。</p><p>供应商可能按其条款保留请求。第三方转发地址会收到你的密钥，请核对地址；本地服务仅供自己使用，不应开放到公网。</p></details></section>
-<footer><span>Open Bazi · 本地优先</span><span>传统文化学习与算法演示。排盘一致性不等于预测有效性。</span></footer>
+<section id="ai-panel" class="ai-panel" hidden aria-labelledby="report-heading">
+<div class="section-heading"><div><p class="eyebrow">02 · 完整分析</p><h2 id="report-heading">命盘与大运流年总报告</h2></div><button id="generate-report" class="primary">生成总报告</button></div>
+<p class="muted">按固定流程分析旺衰、命格与喜忌，解读八步大运和五个流年。生成时向你的模型供应商发送命盘依据，分两次请求，费用由自己的 API 账户承担。</p>
+<ol class="sop-progress" aria-label="分析流程"><li id="step-chart">1 核对命盘与规则</li><li id="step-natal">2 解读命盘与命格</li><li id="step-outlook">3 分析大运与流年</li><li id="step-chat">4 围绕报告追问</li></ol>
+<p id="report-status" role="status" class="status"></p><nav id="report-nav" class="report-nav" aria-label="报告章节" hidden><button type="button" data-report-group="summary" class="nav">总览与建议</button><button type="button" data-report-group="natal" class="nav">命盘与命格</button><button type="button" data-report-group="luck" class="nav">八步大运</button><button type="button" data-report-group="years" class="nav">逐年分析</button></nav>
+<div id="report-content"></div>
+</section>
+<section id="chat-panel" class="reading-panel" hidden aria-labelledby="chat-heading">
+<div class="section-heading"><div><p class="eyebrow">03 · 基于这份报告</p><h2 id="chat-heading">继续问你的命盘</h2></div><button id="clear-chat" class="text-button">清空对话</button></div>
+<p class="muted">助手沿用同一命盘：确认问题 → 核对原局 → 合参运年 → 解释条件 → 给出建议。可以追问报告窗口以外的年份。</p>
+<div class="suggestions"><button type="button" class="secondary" data-question="未来三年事业上有哪些机会和需要留意的地方？">未来三年的事业</button><button type="button" class="secondary" data-question="我的命格为什么这样判断？还有哪些不同的可能？">命格判断的依据</button><button type="button" class="secondary" data-question="这份报告中的喜忌，怎样用在日常选择和相处中？">喜忌怎样理解</button></div>
+<div id="chat-messages" role="log" aria-live="polite" aria-label="命盘对话"></div>
+<form id="chat-form"><label for="question">你想了解什么？</label><textarea id="question" rows="3" maxlength="1500" placeholder="例如：2028年和2029年，我在工作与合作上应分别关注什么？" required></textarea><div class="chat-actions"><span class="field-note">每次回答调用你的模型；对话仅保留在本地内存。</span><button id="send-question" class="primary" type="submit">发送问题</button></div></form><p id="chat-status" class="status" role="status"></p>
+</section>
+</section>
+<section id="connection-page" hidden class="connection-page"><p class="eyebrow">BRING YOUR OWN KEY</p><h1>连接你自己的模型。</h1><p class="muted">选好供应商、填入密钥，点击一次完成测试与接入。离线排盘不需要这一步。</p><form id="connection-form"><label>模型供应商<select id="provider"></select></label><a id="key-link" target="_blank" rel="noopener noreferrer" class="inline-link">前往供应商获取密钥 ↗</a><label>接口地址<input id="base-url" type="url" required placeholder="https://example.com/v1"></label><label>模型名称<input id="model" required placeholder="供应商提供的模型 ID" maxlength="150"></label><label>API Key<input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴你的密钥"></label><p class="field-note">密钥仅保留在本地服务内存中，重启后需要重新填写，不写入浏览器存储或文件。自定义本机接口可留空。</p><div class="connection-actions"><button id="connect" type="submit" class="primary">测试并连接</button><button id="disconnect" type="button" class="secondary">清除连接</button></div><p class="field-note">测试会发送一句简短请求，可能产生少量 API 费用。自定义服务需支持 Chat Completions 和 JSON 输出。</p></form><p id="connection-status" role="status" class="status"></p><details><summary>隐私与连接说明</summary><p>没有平台账号，没有遥测。生成解读时发送计算事实、解释规则；追问还会发送问题、报告和最近对话。原始生日表单不直接发送，但命盘和交运时间仍可反推出个人资料。密钥仅用于所选供应商认证。命盘事实仍可能透露个人信息，请只连接你信任的供应商。</p><p>供应商可能按其条款保留请求。第三方转发地址会收到你的密钥，请核对地址；本地服务仅供自己使用，不应开放到公网。</p></details></section>
+<footer><span>Open Bazi · 本地优先</span><span>传统八字分析工具。未来解读为条件推演，不代表必然事件。</span></footer>
 </main></body></html>
